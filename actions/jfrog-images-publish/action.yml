@@ -1,0 +1,140 @@
+name: JFrog Images Publish
+description: Copy first-party container images from GCP Artifact Registry into JFrog Artifactory, reconciling by digest
+
+inputs:
+  images:
+    description: JSON array of {source, target_path, tag} objects to reconcile
+    required: true
+  gcp_project:
+    description: GCP project holding the source Artifact Registry
+    required: true
+  source_registry:
+    description: Source registry host, e.g. us-docker.pkg.dev (region-specific)
+    required: true
+  wif_provider:
+    description: Full resource name of the Workload Identity Provider
+    required: true
+  gcp_sa_email:
+    description: Service account to impersonate; needs artifactregistry.reader only
+    required: true
+  artifactory_registry:
+    description: Destination registry host, e.g. infosec-sre-local.artifactory.gips.rubrik.com
+    required: true
+  artifactory_path_style:
+    description: Prepend target_repo to the image path instead of relying on subdomain routing
+    required: false
+    default: "false"
+  target_repo:
+    description: Artifactory repo key; used as the path prefix when artifactory_path_style is true
+    required: false
+    default: ""
+  vault_url:
+    description: Vault address
+    required: true
+  vault_path:
+    description: Vault secret path holding the `username` and `token` fields for this team
+    required: true
+  vault_jwt_mount:
+    description: Path of the Vault JWT auth mount trusting GitHub's OIDC issuer
+    required: false
+    default: jwt-github
+  vault_role:
+    description: Vault JWT role to log in as; its policy scopes which secret paths are readable
+    required: true
+  dry_run:
+    description: Resolve digests and report what would be copied, but copy nothing
+    required: false
+    default: "false"
+  team:
+    description: Team this run is scoped to; labels the job summary
+    required: false
+    default: ""
+  environment:
+    description: Environment being reconciled; labels the job summary
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Setup crane
+      # crane, not docker: `crane copy` retains the source digest, while
+      # docker pull/tag/push re-compresses and produces a different one -- the
+      # artifact would no longer be bit-identical to what was tested. It also
+      # preserves the multi-arch index, which docker flattens.
+      uses: imjasonh/setup-crane@v0.7
+
+    # --- (Jfrog) Destination credentials ------------------------------------------
+    - name: Check OIDC token is available
+      shell: bash
+      env:
+        OIDC_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+      run: |
+        set -euo pipefail
+        if [ -z "${OIDC_URL:-}" ]; then
+          echo "::error::no OIDC token available: the calling job needs 'permissions: id-token: write'"
+          exit 1
+        fi
+
+    - name: Fetch Artifactory credentials from Vault
+      id: vault
+      # JWT auth, not AppRole: the runner's GitHub OIDC token is the identity. Vault
+      # validates the token against GitHub's JWKS and binds it to vault_role,
+      # whose policy decides which paths under rubrik-secret/ are readable.
+      uses: hashicorp/vault-action@v3.0.0
+      with:
+        url: ${{ inputs.vault_url }}
+        method: jwt
+        path: ${{ inputs.vault_jwt_mount }}
+        role: ${{ inputs.vault_role }}
+        # vault-action exports these into the job env and registers them as
+        # masked secrets, so the login step below just reads them.
+        secrets: |
+          ${{ inputs.vault_path }} username | ARTIFACTORY_USERNAME ;
+          ${{ inputs.vault_path }} token    | ARTIFACTORY_TOKEN
+
+    # --- (GCP AR) Source credentials -----------------------------------------------
+    - name: Authenticate to GCP via Workload Identity Federation
+      id: gcp
+      uses: google-github-actions/auth@v3
+      with:
+        project_id: ${{ inputs.gcp_project }}
+        workload_identity_provider: ${{ inputs.wif_provider }}
+        service_account: ${{ inputs.gcp_sa_email }}
+        # A registry login needs an access token, and minting one requires
+        # the service-account impersonation path.
+        token_format: access_token
+
+    - name: Log in to both registries
+      shell: bash
+      env:
+        GCP_TOKEN: ${{ steps.gcp.outputs.access_token }}
+        SOURCE_REGISTRY: ${{ inputs.source_registry }}
+        DEST_REGISTRY: ${{ inputs.artifactory_registry }}
+      run: |
+        set -euo pipefail
+        # ARTIFACTORY_USERNAME / ARTIFACTORY_TOKEN are exported into the job env
+        # by the Vault step above, which is why this step does not declare them.
+        : "${ARTIFACTORY_USERNAME:?Artifactory username not set by the Vault step}"
+        : "${ARTIFACTORY_TOKEN:?Artifactory token not set by the Vault step}"
+        echo "$GCP_TOKEN" | crane auth login "$SOURCE_REGISTRY" \
+          --username oauth2accesstoken --password-stdin
+        echo "$ARTIFACTORY_TOKEN" | crane auth login "$DEST_REGISTRY" \
+          --username "$ARTIFACTORY_USERNAME" --password-stdin
+
+    - name: Reconcile images
+      shell: bash
+      env:
+        IMAGES_JSON: ${{ inputs.images }}
+        DEST_REGISTRY: ${{ inputs.artifactory_registry }}
+        DEST_PREFIX: ${{ inputs.artifactory_path_style == 'true' && inputs.target_repo || '' }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        # Summary labels only -- these do not affect what gets copied.
+        TEAM: ${{ inputs.team }}
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/publish.sh"
+
+    - name: Clean up credentials
+      if: always()
+      shell: bash
+      run: rm -f "${HOME}/.docker/config.json" gha-creds-*.json || true

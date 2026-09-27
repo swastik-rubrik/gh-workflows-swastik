@@ -1,0 +1,161 @@
+# Copies first-party images from GCP Artifact Registry into JFrog Artifactory.
+#
+# Vault JWT role is scoped to a single team, 
+# so a run holds exactly one team's Artifactory token and can push
+# only to that team's local-repo.
+#
+# Call it from your own repository:
+#
+#   jobs:
+#     onboard:
+#       uses: swastik-rubrik/gh-workflows-swastik/.github/workflows/jfrog-images-onboarding.yml@main
+#       permissions:
+#         contents: read
+#         id-token: write
+#       with:
+#         team: <team-name>
+#         teams_dir: <teams-dir>  # optional, default: teams
+#         artifactory_registry: <local-jfrog-repo-key>.artifactory.gips.rubrik.com
+#         vault_url: <VAULT_ADDR>
+#
+name: JFrog Images Onboarding
+
+on:
+  workflow_call:
+    inputs:
+      team:
+        description: >-
+          Team to reconcile -- the teams_dir filename without its extension.
+          One per run; the Vault role is scoped to this team.
+        type: string
+        required: true
+      teams_dir:
+        description: Directory in the CALLING repository holding the per-team YAML files
+        type: string
+        required: false
+        default: teams
+      artifactory_registry:
+        description: Destination registry host
+        type: string
+        required: true
+      environment:
+        description: Publish only images listing this environment (absent list means all)
+        type: string
+        required: false
+        default: prod
+      dry_run:
+        description: Resolve digests and report, copy nothing
+        type: boolean
+        required: false
+        default: false
+      artifactory_path_style:
+        description: Prepend the repo key to the image path instead of subdomain routing
+        type: boolean
+        required: false
+        default: false
+      vault_url:
+        description: Vault address. Artifactory credentials always come from Vault.
+        type: string
+        required: true
+      vault_jwt_mount:
+        description: Path of the Vault JWT auth mount trusting GitHub's OIDC issuer
+        type: string
+        required: false
+        default: jwt-github
+      action_ref:
+        description: Ref of gh-workflows-swastik to load the composite action from
+        type: string
+        required: false
+        default: main
+    secrets:
+      repo_token:
+        description: >-
+          Token that can read this repository, needed only while it is private --
+          the default GITHUB_TOKEN is scoped to the calling repo and cannot check
+          this one out. Omit once the repo is public.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Build publish matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      count: ${{ steps.build.outputs.count }}
+    steps:
+      - name: Checkout calling repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Checkout shared workflows repository
+        uses: actions/checkout@v4.2.2
+        with:
+          repository: swastik-rubrik/gh-workflows-swastik
+          ref: ${{ inputs.action_ref }}
+          path: .gh-workflows-swastik
+          token: ${{ secrets.repo_token || github.token }}
+
+      - name: Build matrix
+        id: build
+        env:
+          TEAMS_DIR: ${{ inputs.teams_dir }}
+          TEAM: ${{ inputs.team }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+
+          MATRIX=$(python3 \
+            .gh-workflows-swastik/actions/jfrog-images-publish/scripts/build-matrix.py \
+            --teams-dir "$TEAMS_DIR" \
+            --team "$TEAM" \
+            --environment "$ENVIRONMENT")
+
+          COUNT=$(echo "$MATRIX" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT"   >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+
+    strategy:
+      # The matrix holds at most one entry -- one team per run. It stays a
+      # matrix so the job takes its name and its per-team values from the plan
+      # output
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout shared workflows repository
+        uses: actions/checkout@v4.2.2
+        with:
+          repository: swastik-rubrik/gh-workflows-swastik
+          ref: ${{ inputs.action_ref }}
+          path: .gh-workflows-swastik
+          token: ${{ secrets.repo_token || github.token }}
+
+      - name: Onboard images
+        uses: ./.gh-workflows-swastik/actions/jfrog-images-publish
+        with:
+          images: ${{ toJSON(matrix.images) }}
+          gcp_project: ${{ matrix.gcp_project }}
+          source_registry: ${{ matrix.source_registry }}
+          wif_provider: ${{ matrix.wif_provider }}
+          gcp_sa_email: ${{ matrix.gcp_sa_email }}
+          artifactory_registry: ${{ inputs.artifactory_registry }}
+          artifactory_path_style: ${{ inputs.artifactory_path_style }}
+          target_repo: ${{ matrix.target_repo }}
+          vault_url: ${{ inputs.vault_url }}
+          vault_path: ${{ matrix.vault_path }}
+          vault_jwt_mount: ${{ inputs.vault_jwt_mount }}
+          vault_role: ${{ matrix.vault_role }}
+          dry_run: ${{ inputs.dry_run }}
+          team: ${{ matrix.team }}
+          environment: ${{ inputs.environment }}
