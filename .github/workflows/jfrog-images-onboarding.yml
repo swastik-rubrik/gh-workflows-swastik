@@ -68,13 +68,20 @@ on:
         required: false
         default: main
 
+# A top-level block caps every job in this workflow: a job can narrow it but
+# never widen it. id-token has to be here or the job-level grant below is
+# silently dropped and the OIDC token is never minted.
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   plan:
     name: Build publish matrix
     runs-on: ubuntu-latest
+    # Reads YAML and resolves nothing remote -- no OIDC token here.
+    permissions:
+      contents: read
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
       count: ${{ steps.build.outputs.count }}
