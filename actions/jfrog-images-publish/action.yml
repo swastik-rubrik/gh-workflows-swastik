@@ -18,7 +18,7 @@ inputs:
     description: Service account to impersonate; needs artifactregistry.reader only
     required: true
   artifactory_registry:
-    description: Destination registry host, e.g. infosec-sre-local.artifactory.gips.rubrik.com
+    description: Destination registry host, e.g. myorg.jfrog.io
     required: true
   artifactory_path_style:
     description: Prepend target_repo to the image path instead of relying on subdomain routing

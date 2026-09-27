@@ -7,7 +7,7 @@
 #
 # Inputs (environment):
 #   IMAGES_JSON    JSON array of {source, target_path, tag}
-#   DEST_REGISTRY  destination registry host, e.g. infosec-sre-local.artifactory.gips.rubrik.com
+#   DEST_REGISTRY  destination registry host, e.g. myorg.jfrog.io
 #   DEST_PREFIX    path prefix under the host, e.g. infosec-sre-local (may be empty --
 #                  only set when the registry uses path routing instead of subdomains)
 #   DRY_RUN        "true" to plan without copying

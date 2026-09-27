@@ -30,11 +30,11 @@ team:        infosec-sre
 target_repo: infosec-sre-local
 
 gcp_wif_provider: projects/123456789012/locations/global/workloadIdentityPools/gh-pool/providers/gh-provider
-gcp_sa_email:     gar-reader@infosec-automation-prod.iam.gserviceaccount.com
+gcp_sa_email:     gar-reader@my-gcp-project.iam.gserviceaccount.com
 
 images:
-  - source_image: us-docker.pkg.dev/infosec-automation-prod/infosec-artifact/argus/argus
-    target_path:  argus/argus
+  - source_image: us-docker.pkg.dev/my-gcp-project/my-registry/my-app
+    target_path:  my-app/server
     tag:          cc1546d2825a0b44e078d594d77a5a95bd4b4ba5
     environments: [dev, prod]
 ```
@@ -61,8 +61,8 @@ jobs:
     with:
       team: infosec-sre
       teams_dir: teams
-      artifactory_registry: infosec-sre-local.artifactory.gips.rubrik.com
-      vault_url: https://vault.rubrik.com
+      artifactory_registry: myorg.jfrog.io
+      vault_url: https://vault.example.com
       environment: ${{ inputs.environment || 'dev' }}
       # PRs are always plan-only
       dry_run: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
@@ -98,7 +98,6 @@ The source host is read from `source_image`, not configurable. A team spanning m
 | `artifactory_path_style` | no | `false` | Prepend the repo key instead of subdomain routing |
 | `vault_jwt_mount` | no | `jwt-github` | Vault JWT auth mount |
 | `action_ref` | no | `main` | Ref of this repo — pin to a tag in production |
-| `repo_token` (secret) | no | — | Read token for this repo while it is private |
 
 `environment` is not just a label: `dev` and `prod` are separate Vault entries with separate JFrog tokens.
 
@@ -115,8 +114,8 @@ Every team's runs go through this shared workflow, so the run report is where ac
 
 | image | outcome | digest |
 | --- | --- | --- |
-| `argus/argus:cc1546d2` | copied (new)    | `9f2a1c0b4de8` |
-| `argus/agent:a71b39f4` | already correct | `3c0d81ea77b2` |
+| `my-app/server:cc1546d2` | copied (new)    | `9f2a1c0b4de8` |
+| `my-app/agent:a71b39f4` | already correct | `3c0d81ea77b2` |
 ```
 
 Outcomes: `copied (new)`, `copied (digest mismatch)`, `already correct`, `would copy (…)` under `dry_run`, and `unreadable at source` / `copy failed` / `verify failed`.
@@ -125,7 +124,7 @@ Outcomes: `copied (new)`, `copied (digest mismatch)`, `already correct`, `would 
 
 - `team` is matched against the directory listing, not joined into a path, so it cannot escape `teams_dir`. The `team:` field must equal the filename because the Vault role derives from the field while the run was authorised against the name.
 - Public images (`docker.io`, `quay.io`, …) must not be listed — Artifactory remote repos proxy them on demand. Enforced in review.
-- Pull through the virtual repo: `docker-virtual.artifactory.gips.rubrik.com/<target_path>:<tag>`. Note CPE-9306 — when a path exists in both a local and a remote repo behind the virtual, resolution order decides which you get.
+- Pull through the virtual repo: `docker-virtual.myorg.jfrog.io/<target_path>:<tag>`. Note: when a path exists in both a local and a remote repo behind the virtual, resolution order decides which you get.
 - Scope the WIF provider to `attribute.repository`; a pool trusting the whole org lets any repo read your registry.
 - Pin `action_ref` to a version tag in production.
 
