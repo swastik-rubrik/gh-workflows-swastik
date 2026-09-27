@@ -4,14 +4,17 @@
 # so a run holds exactly one team's Artifactory token and can push
 # only to that team's local-repo.
 #
-# Call it from your own repository:
+# Call it from your own repository. The permissions block MUST sit at the
+# workflow level, not inside the job -- a `uses:` job runs with what the caller
+# grants at workflow level, and a job-level block there can only restrict it:
+#
+#   permissions:
+#     contents: read
+#     id-token: write        # required, or no OIDC token is minted for Vault
 #
 #   jobs:
 #     onboard:
 #       uses: swastik-rubrik/gh-workflows-swastik/.github/workflows/jfrog-images-onboarding.yml@main
-#       permissions:
-#         contents: read
-#         id-token: write
 #       with:
 #         team: <team-name>
 #         teams_dir: <teams-dir>  # optional, default: teams
@@ -68,9 +71,11 @@ on:
         required: false
         default: main
 
-# A top-level block caps every job in this workflow: a job can narrow it but
-# never widen it. id-token has to be here or the job-level grant below is
-# silently dropped and the OIDC token is never minted.
+# Belt and braces. What actually reaches this workflow is decided by the
+# CALLER's workflow-level permissions -- a called workflow can restrict that but
+# never widen it, so the caller must grant id-token: write at ITS workflow level
+# (see the usage comment above). Declaring it here keeps this file honest about
+# what it needs and costs nothing.
 permissions:
   contents: read
   id-token: write

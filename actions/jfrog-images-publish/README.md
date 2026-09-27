@@ -130,7 +130,12 @@ Outcomes: `copied (new)`, `copied (digest mismatch)`, `already correct`, `would 
 
 ## Troubleshooting
 
-**`no OIDC token available`** — the job is missing `permissions: id-token: write`.
+**`no OIDC token available`** — the calling repository is missing
+`permissions: id-token: write` at the **workflow level**. A job that is only
+`uses: <reusable workflow>` runs with the permissions its caller granted at
+workflow level; a `permissions:` block on that job can restrict them but cannot
+add `id-token`. Putting the grant only on the job is the usual cause — the run
+then logs just `Contents: read` / `Metadata: read` and `OIDC_URL` stays empty.
 
 **Vault `400` / `permission denied`** — check `vault_jwt_mount`, that a role named after the team exists, and that its policy grants `read` on `rubrik-secret/data/infosec/<env>/<team>/jfrog-artifactory`.
 
