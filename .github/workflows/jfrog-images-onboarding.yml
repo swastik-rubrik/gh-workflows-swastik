@@ -1,25 +1,25 @@
 # Copies first-party images from GCP Artifact Registry into JFrog Artifactory.
 #
-# Vault JWT role is scoped to a single team, 
-# so a run holds exactly one team's Artifactory token and can push
-# only to that team's local-repo.
-#
+# Every team file in teams_dir is reconciled, one parallel job per
+# (team, project). The Vault JWT role is scoped to a team, so each job holds
+# exactly one team's Artifactory token and can push only to that team's
+# 
 # Call it from your own repository. The permissions block MUST sit at the
 # workflow level, not inside the job -- a `uses:` job runs with what the caller
 # grants at workflow level, and a job-level block there can only restrict it:
 #
 #   permissions:
 #     contents: read
-#     id-token: write        # required, or no OIDC token is minted for Vault
+#     id-token: write    
 #
 #   jobs:
 #     onboard:
 #       uses: swastik-rubrik/gh-workflows-swastik/.github/workflows/jfrog-images-onboarding.yml@main
 #       with:
-#         team: <team-name>
 #         teams_dir: <teams-dir>  # optional, default: teams
 #         artifactory_registry: <your-artifactory-host>
 #         vault_url: <VAULT_ADDR>
+#         team: <team-name>       # optional; omit to reconcile every team file
 #
 name: JFrog Images Onboarding
 
@@ -29,9 +29,11 @@ on:
       team:
         description: >-
           Team to reconcile -- the teams_dir filename without its extension.
-          One per run; the Vault role is scoped to this team.
+          Omit to fan out over every team file in teams_dir; each file still
+          gets its own Vault role, scoped to that team.
         type: string
-        required: true
+        required: false
+        default: ''
       teams_dir:
         description: Directory in the CALLING repository holding the per-team YAML files
         type: string
@@ -42,7 +44,9 @@ on:
         type: string
         required: true
       environment:
-        description: Publish only images listing this environment (absent list means all)
+        description: >-
+          Environment to reconcile. Selects the Vault secret path holding this
+          team's Artifactory credentials, and labels the job summary.
         type: string
         required: false
         default: prod
@@ -77,7 +81,7 @@ permissions:
 
 jobs:
   plan:
-    name: Build publish matrix
+    name: Build matrix jobs
     runs-on: ubuntu-latest
     # Reads YAML and resolves nothing remote -- no OIDC token here.
     permissions:
@@ -96,6 +100,9 @@ jobs:
           ref: ${{ inputs.action_ref }}
           path: .gh-workflows-swastik
 
+      - name: Install matrix builder dependencies
+        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
       - name: Build matrix
         id: build
         env:
@@ -105,10 +112,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          # An empty team means "every file in teams_dir"; passing --team ''
+          # would instead look for a file with no name. The +... form keeps the
+          # expansion valid under `set -u` when the array is empty.
+          TEAM_ARG=()
+          if [ -n "$TEAM" ]; then
+            TEAM_ARG=(--team "$TEAM")
+          fi
+
           MATRIX=$(python3 \
             .gh-workflows-swastik/actions/jfrog-images-publish/scripts/build-matrix.py \
             --teams-dir "$TEAMS_DIR" \
-            --team "$TEAM" \
+            ${TEAM_ARG[@]+"${TEAM_ARG[@]}"} \
             --environment "$ENVIRONMENT")
 
           COUNT=$(echo "$MATRIX" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')
@@ -122,9 +137,8 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      # The matrix holds at most one entry -- one team per run. It stays a
-      # matrix so the job takes its name and its per-team values from the plan
-      # output
+      # One entry per (team, project)
+      fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
     permissions:
