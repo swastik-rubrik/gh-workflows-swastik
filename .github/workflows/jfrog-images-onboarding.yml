@@ -71,11 +71,6 @@ on:
         required: false
         default: main
 
-# Belt and braces. What actually reaches this workflow is decided by the
-# CALLER's workflow-level permissions -- a called workflow can restrict that but
-# never widen it, so the caller must grant id-token: write at ITS workflow level
-# (see the usage comment above). Declaring it here keeps this file honest about
-# what it needs and costs nothing.
 permissions:
   contents: read
   id-token: write

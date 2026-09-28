@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
 """Build the publish matrix for ONE team, from teams/<team>.yaml.
 
-A run reconciles exactly one team. That is not an ergonomic choice, it is what
-the credential model allows: the Vault JWT role is scoped to a single team, so a
+A run reconciles exactly one team.the Vault JWT role is scoped to a single team, so a
 run holds one team's Artifactory token and can only push to that team's
-local-repo. Fanning out over several teams in one run would mean either one role
-reading several teams' paths -- which is the shared credential we removed -- or
-a run holding credentials it has no business holding.
-
-So there is deliberately no --all and no directory-wide mode. `teams/` stays a
-directory for review and audit; a run addresses one file in it.
-
-The output is still a matrix (a one-entry `include` list) rather than a flat
-object, so the calling workflow keeps `strategy.matrix` and the per-entry job
-naming unchanged.
+local-repo. 
 
 Reads YAML with a tiny hand-rolled parser so the workflow needs no pip install and
 no yq. The team files are a fixed, flat shape; see parse_team_yaml.

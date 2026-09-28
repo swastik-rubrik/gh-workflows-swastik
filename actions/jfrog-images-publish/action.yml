@@ -67,11 +67,9 @@ runs:
     # --- (Jfrog) Destination credentials ------------------------------------------
     - name: Check OIDC token is available
       shell: bash
-      env:
-        OIDC_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
       run: |
         set -euo pipefail
-        if [ -z "${OIDC_URL:-}" ]; then
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
           echo "::error::no OIDC token available: the calling job needs 'permissions: id-token: write'"
           exit 1
         fi
