@@ -28,6 +28,72 @@ REQUIRED = ("team", "target_repo")
 REQUIRED_PROJECT = ("gcp_wif_provider", "gcp_sa_email")
 REQUIRED_IMAGE = ("source_image", "target_path", "tag")
 
+# Every source registry in use today is asia-south1. A project that pulls from
+# another region sets `gar_registry:` explicitly, or spells out source_image.
+DEFAULT_GAR_REGISTRY = "asia-south1-docker.pkg.dev"
+
+
+def expand_images(at, proj):
+    """Expand the shorthand image forms into full {source_image, target_path, tag}.
+
+    Three forms are accepted, and a project may mix them:
+
+        images:
+          - mock-react:v1                       # shorthand, needs gar_repo
+          - name: mock-react                    # shorthand, split fields
+            tag: v1
+          - source_image: <host>/<proj>/<repo>/mock-react   # explicit, always valid
+            target_path: mock-react
+            tag: v1
+
+    Shorthand derives source_image from the project's `gar_registry`/`gcp_project`/
+    `gar_repo`, and defaults target_path to the image name. The explicit form is
+    left untouched, so existing team files keep working unchanged.
+
+    Runs before validate_images, so the `latest` and tagged-source_image guards
+    apply to every form.
+    """
+    gar_repo = proj.get("gar_repo")
+    gcp_project = proj.get("gcp_project")
+    registry = proj.get("gar_registry", DEFAULT_GAR_REGISTRY)
+
+    out = []
+    for i, img in enumerate(proj.get("images") or []):
+        where = "%s: images[%d]" % (at, i)
+
+        if isinstance(img, str):
+            # "mock-react:v1" -- exactly one colon, both halves non-empty.
+            name, sep, tag = img.partition(":")
+            if not sep or not name or not tag:
+                sys.exit("%s: %r must be in the form 'name:tag'" % (where, img))
+            img = {"name": name, "tag": tag}
+        elif not isinstance(img, dict):
+            sys.exit("%s: expected a mapping or 'name:tag' string, got %s"
+                     % (where, type(img).__name__))
+        else:
+            img = dict(img)
+
+        if not img.get("source_image"):
+            name = img.pop("name", None)
+            if not name:
+                sys.exit("%s: needs either `source_image` or `name`" % where)
+            if not gar_repo:
+                sys.exit("%s: shorthand image %r needs `gar_repo` on the project "
+                         "(or give the image an explicit `source_image`)" % (where, name))
+            if not gcp_project:
+                sys.exit("%s: shorthand image %r needs `gcp_project` on the project "
+                         "(or give the image an explicit `source_image`)" % (where, name))
+            img["source_image"] = "%s/%s/%s/%s" % (registry, gcp_project, gar_repo, name)
+            img.setdefault("target_path", name)
+        else:
+            img.setdefault("target_path",
+                           str(img["source_image"]).rstrip("/").split("/")[-1])
+
+        out.append(img)
+
+    return out
+
+
 def validate_images(where, images):
     for i, img in enumerate(images):
         at = "%s: images[%d]" % (where, i)
@@ -99,6 +165,9 @@ def load_team(teams_dir, team):
             sys.exit("%s: missing required field(s): %s" % (at, ", ".join(missing)))
         if not proj.get("images"):
             sys.exit("%s: no images declared" % at)
+        # Shorthand entries become full records here, so everything downstream
+        # -- validation, the matrix, publish.sh -- sees one shape only.
+        proj["images"] = expand_images(at, proj)
         validate_images(at, proj["images"])
 
     spec["projects"] = projects

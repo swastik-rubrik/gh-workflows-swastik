@@ -37,7 +37,7 @@ inputs:
   vault_jwt_mount:
     description: Path of the Vault JWT auth mount trusting GitHub's OIDC issuer
     required: false
-    default: jwt-github
+    default: github-jwt
   vault_role:
     description: Vault JWT role to log in as; its policy scopes which secret paths are readable
     required: true

@@ -16,10 +16,15 @@
 #     onboard:
 #       uses: swastik-rubrik/gh-workflows-swastik/.github/workflows/jfrog-images-onboarding.yml@main
 #       with:
-#         teams_dir: <teams-dir>  # optional, default: teams
-#         artifactory_registry: <your-artifactory-host>
-#         vault_url: <VAULT_ADDR>
-#         team: <team-name>       # optional; omit to reconcile every team file
+#         vault_url: <VAULT_ADDR>   # the only required input
+#
+# Everything else has a default that suits the shared instance:
+#   teams_dir            teams
+#   artifactory_registry beelzi.jfrog.io
+#   artifactory_path_style true
+#   vault_jwt_mount      github-jwt
+#   team                 '' -- every file in teams_dir
+#   environment          prod
 #
 name: JFrog Images Onboarding
 
@@ -40,9 +45,10 @@ on:
         required: false
         default: teams
       artifactory_registry:
-        description: Destination registry host
+        description: Destination registry host. Defaults to the shared instance.
         type: string
-        required: true
+        required: false
+        default: beelzi.jfrog.io
       environment:
         description: >-
           Environment to reconcile. Selects the Vault secret path holding this
@@ -56,19 +62,25 @@ on:
         required: false
         default: false
       artifactory_path_style:
-        description: Prepend the repo key to the image path instead of subdomain routing
+        description: >-
+          Prepend the repo key to the image path instead of subdomain routing.
+          Required on a free JFrog instance, which has no per-repo subdomains.
         type: boolean
         required: false
-        default: false
+        default: true
       vault_url:
-        description: Vault address. Artifactory credentials always come from Vault.
+        description: >-
+          Vault address. Artifactory credentials always come from Vault.
+          Deliberately has no default: the current dev instance is a Cloudflare
+          tunnel whose hostname changes on every restart, so a baked-in default
+          would send runs at a dead host and fail at the login step.
         type: string
         required: true
       vault_jwt_mount:
         description: Path of the Vault JWT auth mount trusting GitHub's OIDC issuer
         type: string
         required: false
-        default: jwt-github
+        default: github-jwt
       action_ref:
         description: Ref of gh-workflows-swastik to load the composite action from
         type: string
