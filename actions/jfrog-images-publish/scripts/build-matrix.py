@@ -28,9 +28,10 @@ REQUIRED = ("team", "target_repo")
 REQUIRED_PROJECT = ("gcp_wif_provider", "gcp_sa_email")
 REQUIRED_IMAGE = ("source_image", "target_path", "tag")
 
-# Every source registry in use today is asia-south1. A project that pulls from
-# another region sets `gar_registry:` explicitly, or spells out source_image.
-DEFAULT_GAR_REGISTRY = "asia-south1-docker.pkg.dev"
+# There is deliberately no default GAR region. A default would live here, in
+# the shared repo, where the team whose images it resolves cannot see or change
+# it -- and getting it wrong is silent: the run builds a plausible path in the
+# wrong region and fails later at pull time. Shorthand states its registry.
 
 
 def expand_images(at, proj):
@@ -47,15 +48,16 @@ def expand_images(at, proj):
             tag: v1
 
     Shorthand derives source_image from the project's `gar_registry`/`gcp_project`/
-    `gar_repo`, and defaults target_path to the image name. The explicit form is
-    left untouched, so existing team files keep working unchanged.
+    `gar_repo`, and defaults target_path to the image name. All three are required
+    when shorthand is used -- the region is not assumed. The explicit form is left
+    untouched, so a team can always spell out a one-off registry per image.
 
     Runs before validate_images, so the `latest` and tagged-source_image guards
     apply to every form.
     """
     gar_repo = proj.get("gar_repo")
     gcp_project = proj.get("gcp_project")
-    registry = proj.get("gar_registry", DEFAULT_GAR_REGISTRY)
+    registry = proj.get("gar_registry")
 
     out = []
     for i, img in enumerate(proj.get("images") or []):
@@ -83,6 +85,18 @@ def expand_images(at, proj):
             if not gcp_project:
                 sys.exit("%s: shorthand image %r needs `gcp_project` on the project "
                          "(or give the image an explicit `source_image`)" % (where, name))
+            if not registry:
+                sys.exit(
+                    "%s: shorthand image %r needs `gar_registry` on the project, "
+                    "e.g.\n"
+                    "    gar_registry: asia-south1-docker.pkg.dev\n"
+                    "It is the host of your Artifact Registry -- "
+                    "`<location>-docker.pkg.dev`, where <location> is the region "
+                    "the repo was created in (see the Artifact Registry console, "
+                    "or `gcloud artifacts repositories list`). There is no default: "
+                    "guessing the region would build a valid-looking path that only "
+                    "fails when the image is pulled."
+                    % (where, name))
             img["source_image"] = "%s/%s/%s/%s" % (registry, gcp_project, gar_repo, name)
             img.setdefault("target_path", name)
         else:

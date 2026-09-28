@@ -33,6 +33,7 @@ target_repo: infosec-sre-dev-local
 
 projects:
   - gcp_project:      my-gcp-project
+    gar_registry:     asia-south1-docker.pkg.dev   # the region your GAR repo is in
     gar_repo:         my-registry
     gcp_wif_provider: projects/123456789012/locations/global/workloadIdentityPools/gh-pool/providers/gh-provider
     gcp_sa_email:     gar-reader@my-gcp-project.iam.gserviceaccount.com
@@ -42,7 +43,11 @@ projects:
       - my-agent:v1
 ```
 
-Each image is `name:tag`, resolved against the project's `gcp_project` + `gar_repo` into a full `source_image`, with `target_path` defaulting to the name. An image whose Artifactory path differs, or that lives outside the project's `gar_repo`, spells itself out:
+Each image is `name:tag`, resolved against the project's `gar_registry` + `gcp_project` + `gar_repo` into a full `source_image`, with `target_path` defaulting to the name.
+
+`gar_registry` is stated per project and has **no default**. A default would live in this shared repo, invisible to the team whose images it resolves, and getting it wrong is silent — the run would build a plausible path in the wrong region and only fail later at pull time. It is `<location>-docker.pkg.dev`, where `<location>` is the region the repo was created in (`gcloud artifacts repositories list`). A team pulling from several regions gives each its own `projects:` entry.
+
+An image whose Artifactory path differs, or that lives outside the project's `gar_repo`, spells itself out:
 
 ```yaml
     images:
@@ -134,7 +139,7 @@ Per entry in `projects:`:
 | `images` | yes | See the three forms above |
 | `gcp_project` | for shorthand | Also inferred from an explicit `source_image` |
 | `gar_repo` | for shorthand | GAR repository holding the images |
-| `gar_registry` | no | Defaults to `asia-south1-docker.pkg.dev` |
+| `gar_registry` | for shorthand | Registry host, `<location>-docker.pkg.dev`. No default — the region is never assumed |
 
 Per image, after expansion: `source_image` (host + path, **no tag**), `target_path`, `tag` (immutable, `latest` rejected) are required; `environments` (absent means all) and `service` are optional. Shorthand supplies the first two.
 
@@ -202,7 +207,9 @@ then logs just `Contents: read` / `Metadata: read` and `OIDC_URL` stays empty.
 
 **`declares team 'x' but the file is named 'y'`** — the field and filename disagree; the run would authenticate as a different team than requested.
 
-**`images span multiple source registries`** — split into separate team files.
+**`spans multiple source registries`** — one `projects:` entry mixes two registry hosts. Split it into one entry per host; each authenticates separately.
+
+**``needs `gar_registry` on the project``** — a shorthand image with no registry to resolve against. Add the host your GAR repo lives in, or give that image an explicit `source_image`.
 
 **Empty matrix** — no images list the chosen `environment`. Expected; the publish job is skipped.
 

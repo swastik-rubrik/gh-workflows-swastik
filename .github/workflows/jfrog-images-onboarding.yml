@@ -16,7 +16,7 @@
 #     onboard:
 #       uses: swastik-rubrik/gh-workflows-swastik/.github/workflows/jfrog-images-onboarding.yml@main
 #       with:
-#         vault_url: <VAULT_ADDR>   # the only required input
+#         vault_url: <VAULT_ADDR>   
 #
 # Everything else has a default that suits the shared instance:
 #   teams_dir            teams
@@ -61,6 +61,7 @@ on:
         type: boolean
         required: false
         default: false
+      # To be removed in the Rubrik JFrog
       artifactory_path_style:
         description: >-
           Prepend the repo key to the image path instead of subdomain routing.
@@ -95,7 +96,6 @@ jobs:
   plan:
     name: Build matrix jobs
     runs-on: ubuntu-latest
-    # Reads YAML and resolves nothing remote -- no OIDC token here.
     permissions:
       contents: read
     outputs:
@@ -124,9 +124,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # An empty team means "every file in teams_dir"; passing --team ''
-          # would instead look for a file with no name. The +... form keeps the
-          # expansion valid under `set -u` when the array is empty.
           TEAM_ARG=()
           if [ -n "$TEAM" ]; then
             TEAM_ARG=(--team "$TEAM")

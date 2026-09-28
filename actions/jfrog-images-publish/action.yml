@@ -58,10 +58,8 @@ runs:
   using: composite
   steps:
     - name: Setup crane
-      # crane, not docker: `crane copy` retains the source digest, while
-      # docker pull/tag/push re-compresses and produces a different one -- the
-      # artifact would no longer be bit-identical to what was tested. It also
-      # preserves the multi-arch index, which docker flattens.
+      # crane, not docker: `crane copy` retains the source digest, while docker pull/tag/push re-compresses and produces a different one -- the
+      # artifact would no longer be bit-identical to what was tested. It also preserves the multi-arch index, which docker flattens.
       uses: imjasonh/setup-crane@v0.7
 
     # --- (Jfrog) Destination credentials ------------------------------------------
@@ -76,8 +74,7 @@ runs:
 
     - name: Fetch Artifactory credentials from Vault
       id: vault
-      # JWT auth, not AppRole: the runner's GitHub OIDC token is the identity. Vault
-      # validates the token against GitHub's JWKS and binds it to vault_role,
+      # JWT auth, not AppRole: the runner's GitHub OIDC token is the identity. Vault validates the token against GitHub's JWKS and binds it to vault_role,
       # whose policy decides which paths under rubrik-secret/ are readable.
       uses: hashicorp/vault-action@v3.0.0
       with:
@@ -85,8 +82,6 @@ runs:
         method: jwt
         path: ${{ inputs.vault_jwt_mount }}
         role: ${{ inputs.vault_role }}
-        # vault-action exports these into the job env and registers them as
-        # masked secrets, so the login step below just reads them.
         secrets: |
           ${{ inputs.vault_path }} username | ARTIFACTORY_USERNAME ;
           ${{ inputs.vault_path }} token    | ARTIFACTORY_TOKEN
@@ -99,8 +94,7 @@ runs:
         project_id: ${{ inputs.gcp_project }}
         workload_identity_provider: ${{ inputs.wif_provider }}
         service_account: ${{ inputs.gcp_sa_email }}
-        # A registry login needs an access token, and minting one requires
-        # the service-account impersonation path.
+        # A registry login needs an access token, and minting one requires the service-account impersonation path.
         token_format: access_token
 
     - name: Log in to both registries

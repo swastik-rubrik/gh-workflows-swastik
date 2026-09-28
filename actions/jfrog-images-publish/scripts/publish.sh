@@ -5,18 +5,7 @@
 # For each image: compare the source digest to the destination digest and copy only
 # what is missing or mismatched, then verify what landed.
 #
-# Inputs (environment):
-#   IMAGES_JSON    JSON array of {source, target_path, tag}
-#   DEST_REGISTRY  destination registry host, e.g. myorg.jfrog.io
-#   DEST_PREFIX    path prefix under the host, e.g. infosec-sre-local (may be empty --
-#                  only set when the registry uses path routing instead of subdomains)
-#   DRY_RUN        "true" to plan without copying
-#   TEAM           team this run is scoped to; labels the summary only (optional)
-#   ENVIRONMENT    environment being reconciled; labels the summary only (optional)
-#
 # Both registry logins are the caller's job; this script only reads and copies.
-# Runnable outside Actions: the env-var contract is the whole interface.
-#
 # Exits non-zero if any image fails to copy or verify. Every image is attempted before
 # exiting so one bad tag does not mask the state of the rest.
 
@@ -138,9 +127,7 @@ else
 fi
 
 # Job summary: one row per image, so the run itself is the audit record of what
-# this team has in Artifactory. The team specs live in the calling repositories,
-# but every run reports through this shared workflow, which is where the central
-# view comes from.
+# this team has in Artifactory. 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
     echo "### ${TEAM:-images}${ENVIRONMENT:+ — $ENVIRONMENT}"
