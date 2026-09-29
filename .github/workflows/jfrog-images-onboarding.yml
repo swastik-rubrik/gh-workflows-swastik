@@ -1,61 +1,46 @@
 # Copies first-party images from GCP Artifact Registry into JFrog Artifactory.
 #
-# Every team file in teams_dir is reconciled, one parallel job per
-# (team, project). The Vault JWT role is scoped to a team, so each job holds
-# exactly one team's Artifactory token and can push only to that team's
-# 
+# Reads one images file from the calling repository and reconciles it, one
+# parallel job per GCP project listed in it. Every image lands in the file's
+# single `target_repo`.
+#
 # Call it from your own repository. The permissions block MUST sit at the
 # workflow level, not inside the job -- a `uses:` job runs with what the caller
 # grants at workflow level, and a job-level block there can only restrict it:
 #
 #   permissions:
 #     contents: read
-#     id-token: write    
+#     id-token: write    # GCP Workload Identity Federation
 #
 #   jobs:
 #     onboard:
 #       uses: swastik-rubrik/gh-workflows-swastik/.github/workflows/jfrog-images-onboarding.yml@main
-#       with:
-#         vault_url: <VAULT_ADDR>   
+#       secrets:
+#         JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+#         JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
 #
-# Everything else has a default that suits the shared instance:
-#   teams_dir            teams
-#   artifactory_registry beelzi.jfrog.io
+# The two secrets are repository secrets in the calling repo. Every input has a
+# default that suits the shared instance:
+#   images_file            images.yaml
+#   artifactory_registry   beelzi.jfrog.io
 #   artifactory_path_style true
-#   vault_jwt_mount      github-jwt
-#   team                 '' -- every file in teams_dir
-#   environment          prod
+#   dry_run                false
 #
 name: JFrog Images Onboarding
 
 on:
   workflow_call:
     inputs:
-      team:
-        description: >-
-          Team to reconcile -- the teams_dir filename without its extension.
-          Omit to fan out over every team file in teams_dir; each file still
-          gets its own Vault role, scoped to that team.
+      images_file:
+        description: Path in the CALLING repository to the images YAML file
         type: string
         required: false
-        default: ''
-      teams_dir:
-        description: Directory in the CALLING repository holding the per-team YAML files
-        type: string
-        required: false
-        default: teams
+        default: images.yaml
       artifactory_registry:
         description: Destination registry host. Defaults to the shared instance.
         type: string
         required: false
         default: beelzi.jfrog.io
-      environment:
-        description: >-
-          Environment to reconcile. Selects the Vault secret path holding this
-          team's Artifactory credentials, and labels the job summary.
-        type: string
-        required: false
-        default: prod
       dry_run:
         description: Resolve digests and report, copy nothing
         type: boolean
@@ -69,24 +54,18 @@ on:
         type: boolean
         required: false
         default: true
-      vault_url:
-        description: >-
-          Vault address. Artifactory credentials always come from Vault.
-          Deliberately has no default: the current dev instance is a Cloudflare
-          tunnel whose hostname changes on every restart, so a baked-in default
-          would send runs at a dead host and fail at the login step.
-        type: string
-        required: true
-      vault_jwt_mount:
-        description: Path of the Vault JWT auth mount trusting GitHub's OIDC issuer
-        type: string
-        required: false
-        default: github-jwt
       action_ref:
         description: Ref of gh-workflows-swastik to load the composite action from
         type: string
         required: false
         default: main
+    secrets:
+      JFROG_USERNAME:
+        description: Artifactory user the token belongs to
+        required: true
+      JFROG_TOKEN:
+        description: Artifactory access token with deploy rights on target_repo
+        required: true
 
 permissions:
   contents: read
@@ -118,22 +97,13 @@ jobs:
       - name: Build matrix
         id: build
         env:
-          TEAMS_DIR: ${{ inputs.teams_dir }}
-          TEAM: ${{ inputs.team }}
-          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGES_FILE: ${{ inputs.images_file }}
         run: |
           set -euo pipefail
 
-          TEAM_ARG=()
-          if [ -n "$TEAM" ]; then
-            TEAM_ARG=(--team "$TEAM")
-          fi
-
           MATRIX=$(python3 \
             .gh-workflows-swastik/actions/jfrog-images-publish/scripts/build-matrix.py \
-            --teams-dir "$TEAMS_DIR" \
-            ${TEAM_ARG[@]+"${TEAM_ARG[@]}"} \
-            --environment "$ENVIRONMENT")
+            --file "$IMAGES_FILE")
 
           COUNT=$(echo "$MATRIX" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
@@ -146,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      # One entry per (team, project)
+      # One entry per GCP project
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
@@ -173,10 +143,8 @@ jobs:
           artifactory_registry: ${{ inputs.artifactory_registry }}
           artifactory_path_style: ${{ inputs.artifactory_path_style }}
           target_repo: ${{ matrix.target_repo }}
-          vault_url: ${{ inputs.vault_url }}
-          vault_path: ${{ matrix.vault_path }}
-          vault_jwt_mount: ${{ inputs.vault_jwt_mount }}
-          vault_role: ${{ matrix.vault_role }}
+          # Composite actions cannot read the secrets context, so the
+          # credentials are handed over as inputs. They stay masked in logs.
+          artifactory_username: ${{ secrets.JFROG_USERNAME }}
+          artifactory_token: ${{ secrets.JFROG_TOKEN }}
           dry_run: ${{ inputs.dry_run }}
-          team: ${{ matrix.team }}
-          environment: ${{ inputs.environment }}

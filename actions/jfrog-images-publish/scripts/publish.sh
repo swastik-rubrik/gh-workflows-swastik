@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Reconcile one (gcp_project, team) pair's images into Artifactory.
+# Reconcile one GCP project's images into Artifactory.
 #
 # For each image: compare the source digest to the destination digest and copy only
 # what is missing or mismatched, then verify what landed.
@@ -15,8 +15,8 @@ set -uo pipefail
 : "${DEST_REGISTRY:?DEST_REGISTRY is required}"
 DEST_PREFIX="${DEST_PREFIX:-}"
 DRY_RUN="${DRY_RUN:-false}"
-TEAM="${TEAM:-}"
-ENVIRONMENT="${ENVIRONMENT:-}"
+GCP_PROJECT="${GCP_PROJECT:-}"
+TARGET_REPO="${TARGET_REPO:-}"
 
 copied=0
 skipped=0
@@ -127,10 +127,10 @@ else
 fi
 
 # Job summary: one row per image, so the run itself is the audit record of what
-# this team has in Artifactory. 
+# this project has in Artifactory.
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
-    echo "### ${TEAM:-images}${ENVIRONMENT:+ — $ENVIRONMENT}"
+    echo "### ${GCP_PROJECT:-images}${TARGET_REPO:+ → $TARGET_REPO}"
     echo
     if [ "$DRY_RUN" = "true" ]; then
       echo "**Dry run** — nothing was copied."

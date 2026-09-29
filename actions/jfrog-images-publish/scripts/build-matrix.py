@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Build the publish matrix from teams/*.yaml.
+"""Build the publish matrix from images.yaml.
 
-One matrix entry per (team, project). A team file declares its identity once at
-the root and lists one or more `projects:`, each with its own GCP credentials and
-images -- so a single team can pull images from several GCP projects.
-
-The Vault JWT role is scoped to a team, so every entry from one file shares that
-team's Artifactory token and can only push to that team's local-repo.
+One matrix entry per project. The file declares its `target_repo` once at the
+root and lists one or more `projects:`, each with its own GCP credentials and
+images -- so one file can pull images from several GCP projects, all landing in
+the same Artifactory repo.
 
 Usage:
-    build-matrix.py --teams-dir DIR [--team NAME] [--environment ENV]
+    build-matrix.py --file images.yaml
 
 Which images actually get copied is decided per-image at runtime by comparing
 registry digests; this script only decides scope.
@@ -24,12 +22,12 @@ import os
 import sys
 import yaml
 
-REQUIRED = ("team", "target_repo")
+REQUIRED = ("target_repo", "projects")
 REQUIRED_PROJECT = ("gcp_wif_provider", "gcp_sa_email")
 REQUIRED_IMAGE = ("source_image", "target_path", "tag")
 
 # There is deliberately no default GAR region. A default would live here, in
-# the shared repo, where the team whose images it resolves cannot see or change
+# the shared repo, where the repo whose images it resolves cannot see or change
 # it -- and getting it wrong is silent: the run builds a plausible path in the
 # wrong region and fails later at pull time. Shorthand states its registry.
 
@@ -46,11 +44,6 @@ def expand_images(at, proj):
           - source_image: <host>/<proj>/<repo>/mock-react   # explicit, always valid
             target_path: mock-react
             tag: v1
-
-    Shorthand derives source_image from the project's `gar_registry`/`gcp_project`/
-    `gar_repo`, and defaults target_path to the image name. All three are required
-    when shorthand is used -- the region is not assumed. The explicit form is left
-    untouched, so a team can always spell out a one-off registry per image.
 
     Runs before validate_images, so the `latest` and tagged-source_image guards
     apply to every form.
@@ -124,29 +117,29 @@ def validate_images(where, images):
             sys.exit("%s: source_image must not carry a tag; use the `tag` field" % at)
 
 
-def available_teams(teams_dir):
-    return sorted(
-        os.path.splitext(n)[0]
-        for n in os.listdir(teams_dir)
-        if n.endswith((".yaml", ".yml"))
-    )
-
-
-def team_path(teams_dir, team):
-    for ext in (".yaml", ".yml"):
-        path = os.path.join(teams_dir, team + ext)
-        if os.path.isfile(path):
-            return path
-    sys.exit("no team file for %r in %s" % (team, teams_dir))
-
-
-def load_team(teams_dir, team):
-    """Load and validate one team file. Returns None if the file is empty.
+def check_unique_targets(path, projects):
+    """Every image lands in the one target_repo, so no two may share a
+    target_path:tag. Two sources for one destination would overwrite each other
+    on every run, each job seeing the other's digest as a mismatch.
     """
-    path = team_path(teams_dir, team)
+    seen = {}
+    for p, proj in enumerate(projects):
+        for i, img in enumerate(proj["images"]):
+            key = "%s:%s" % (img["target_path"], img["tag"])
+            at = "projects[%d].images[%d]" % (p, i)
+            if key in seen:
+                sys.exit("%s: %s and %s both publish %r; each destination "
+                         "needs exactly one source" % (path, seen[key], at, key))
+            seen[key] = at
 
-    # A syntax error is a team's own typo, so report the file and the position
-    # PyYAML found rather than letting a traceback reach the job log.
+
+def load_spec(path):
+    """Load and validate the images file."""
+    if not os.path.isfile(path):
+        sys.exit("images file not found: %s" % path)
+
+    # A syntax error is a typo in the calling repo, so report the file and the
+    # position PyYAML found rather than letting a traceback reach the job log.
     try:
         with open(path, encoding="utf-8") as fh:
             spec = yaml.safe_load(fh.read())
@@ -156,8 +149,6 @@ def load_team(teams_dir, team):
         where = " (line %d, column %d)" % (mark.line + 1, mark.column + 1) if mark else ""
         sys.exit("%s: invalid YAML%s: %s" % (path, where, detail))
 
-    if spec is None:
-        return None
     if not isinstance(spec, dict):
         sys.exit("%s: expected a mapping at the top level" % path)
 
@@ -165,15 +156,13 @@ def load_team(teams_dir, team):
     if missing:
         sys.exit("%s: missing required field(s): %s" % (path, ", ".join(missing)))
 
-    # The Vault role is derived from the `team:` field, while the run was
-    # authorised against the filename. 
-    if spec["team"] != team:
-        sys.exit("%s: declares team %r but the file is named %r; they must match"
-                 % (path, spec["team"], team))
-
-    projects = normalise_projects(path, spec)
+    projects = spec["projects"]
+    if not isinstance(projects, list):
+        sys.exit("%s: `projects` must be a non-empty list" % path)
     for i, proj in enumerate(projects):
         at = "%s: projects[%d]" % (path, i)
+        if not isinstance(proj, dict):
+            sys.exit("%s: expected a mapping" % at)
         missing = [k for k in REQUIRED_PROJECT if not proj.get(k)]
         if missing:
             sys.exit("%s: missing required field(s): %s" % (at, ", ".join(missing)))
@@ -184,49 +173,11 @@ def load_team(teams_dir, team):
         proj["images"] = expand_images(at, proj)
         validate_images(at, proj["images"])
 
-    spec["projects"] = projects
+    check_unique_targets(path, projects)
     return spec
 
 
-def normalise_projects(path, spec):
-    """Return the file's projects as a list.
-    """
-    projects = spec.get("projects")
-
-    if projects is None:
-        if not spec.get("images"):
-            sys.exit("%s: no projects and no images declared" % path)
-        return [{
-            "gcp_project": spec.get("gcp_project"),
-            "gcp_wif_provider": spec.get("gcp_wif_provider"),
-            "gcp_sa_email": spec.get("gcp_sa_email"),
-            "images": spec["images"],
-        }]
-
-    if not isinstance(projects, list) or not projects:
-        sys.exit("%s: `projects` must be a non-empty list" % path)
-    if spec.get("images"):
-        sys.exit("%s: declares both `projects` and a root-level `images`; "
-                 "move the images under a project" % path)
-    for proj in projects:
-        if not isinstance(proj, dict):
-            sys.exit("%s: each project must be a mapping" % path)
-    return projects
-
-VAULT_PATH_TEMPLATE = "rubrik-secret/data/infosec/{env}/{team}/jfrog-artifactory"
-
-def vault_path_of(spec, environment):
-    """Explicit vault_path wins; otherwise build it from the standard layout."""
-    if spec.get("vault_path"):
-        return spec["vault_path"]
-    return VAULT_PATH_TEMPLATE.format(env=environment, team=spec["team"])
-
-def vault_role_of(spec):
-    """Vault JWT role for this team (eg: appsec, infosec-sre). Defaults to the team name."""
-    return spec.get("vault_role") or spec["team"]
-
-
-def gcp_project_of(path, proj):
+def gcp_project_of(at, proj):
     """Explicit gcp_project, else infer from the first image's source host path."""
     if proj.get("gcp_project"):
         return proj["gcp_project"]
@@ -235,45 +186,37 @@ def gcp_project_of(path, proj):
     # <location>-docker.pkg.dev/<project>/<repo>/<path...>
     if len(parts) >= 2 and ".pkg.dev" in parts[0]:
         return parts[1]
-    sys.exit("%s: cannot infer gcp_project from %r; set it explicitly" % (path, src))
+    sys.exit("%s: cannot infer gcp_project from %r; set it explicitly" % (at, src))
 
 
-def source_registry_of(path, gcp_project, imgs):
+def source_registry_of(at, gcp_project, imgs):
     """The registry host to log in to, taken from the images themselves.
     """
     hosts = sorted({img["source"].split("/")[0] for img in imgs})
     if len(hosts) > 1:
         sys.exit("%s: project %r spans multiple source registries (%s); "
                  "split them into separate `projects:` entries"
-                 % (path, gcp_project, ", ".join(hosts)))
+                 % (at, gcp_project, ", ".join(hosts)))
     return hosts[0]
 
 
-def build_entries(spec, team, path):
-    """One team file in, one matrix entry per project out.
-
-    A project with no images yields no entry; an empty `include` overall is a
-    valid, successful outcome and the workflow skips the publish job.
-    """
+def build_entries(spec, path):
+    """The images file in, one matrix entry per project out."""
     entries = []
 
-    for proj in spec["projects"]:
+    for p, proj in enumerate(spec["projects"]):
+        at = "%s: projects[%d]" % (path, p)
         imgs = [{
             "source": "%s:%s" % (img["source_image"], img["tag"]),
             "target_path": img["target_path"],
             "tag": img["tag"],
         } for img in proj["images"]]
 
-        if not imgs:
-            continue
-
-        gcp_project = gcp_project_of(path, proj)
+        gcp_project = gcp_project_of(at, proj)
         entries.append({
-            "name": "%s/%s" % (gcp_project, spec["team"]),
-            "team": spec["team"],
-            "file": team,
+            "name": gcp_project,
             "gcp_project": gcp_project,
-            "source_registry": source_registry_of(path, gcp_project, imgs),
+            "source_registry": source_registry_of(at, gcp_project, imgs),
             "wif_provider": proj["gcp_wif_provider"],
             "gcp_sa_email": proj["gcp_sa_email"],
             "target_repo": spec["target_repo"],
@@ -285,48 +228,20 @@ def build_entries(spec, team, path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--teams-dir", required=True)
-    ap.add_argument("--team", default=None,
-                    help="Team file to reconcile, without the extension. "
-                         "Omit to fan out over every team file in the directory.")
-    ap.add_argument("--environment", default="prod")
+    ap.add_argument("--file", required=True,
+                    help="Path to images.yaml in the calling repository")
     args = ap.parse_args()
 
-    if not os.path.isdir(args.teams_dir):
-        sys.exit("teams dir not found: %s" % args.teams_dir)
-
-    names = available_teams(args.teams_dir)
-    if not names:
-        sys.exit("no team files found in %s" % args.teams_dir)
-
-    if args.team is not None:
-        if args.team not in names:
-            sys.exit("no team file for %r in %s; available: %s"
-                     % (args.team, args.teams_dir, ", ".join(names)))
-        names = [args.team]
-
-    include, skipped = [], []
-    for name in names:
-        spec = load_team(args.teams_dir, name)
-        if spec is None:
-            skipped.append(name)
-            continue
-        entries = build_entries(spec, name, team_path(args.teams_dir, name))
-        for entry in entries:
-            entry["vault_path"] = vault_path_of(spec, args.environment)
-            entry["vault_role"] = vault_role_of(spec)
-        include.extend(entries)
-
+    spec = load_spec(args.file)
+    include = build_entries(spec, args.file)
     matrix = {"include": include}
 
     # Human-readable summary goes to stderr so stdout stays pure JSON.
     total = sum(len(e["images"]) for e in include)
-    print("matrix: %d job(s), %d image(s), environment=%s"
-          % (len(include), total, args.environment), file=sys.stderr)
+    print("matrix: %d job(s), %d image(s) -> %s"
+          % (len(include), total, spec["target_repo"]), file=sys.stderr)
     for e in include:
         print("  %-40s %d image(s)" % (e["name"], len(e["images"])), file=sys.stderr)
-    if skipped:
-        print("  skipped (empty): %s" % ", ".join(skipped), file=sys.stderr)
 
     print(json.dumps(matrix, separators=(",", ":")))
 
