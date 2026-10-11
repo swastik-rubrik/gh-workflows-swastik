@@ -1,0 +1,42 @@
+# Copy to .github/workflows/ in BOTH swastik-rubrik/gh-workflows-swastik and
+# swastik-rubrik/poc, with vault-check.sh at .github/scripts/vault-check.sh.
+# Repo variable required: VAULT_ADDR (the tunnel URL).
+# Each case computes its own expected result from repo/ref/environment/audience, so a
+# green job means "behaved exactly as the policy requires" -- including denials.
+name: vault-jwt-test
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+
+jobs:
+  no-environment:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: T1, role: gh-main,      aud: "https://github.com/swastik-rubrik" }  # allowed only: gh-workflows repo @ main
+          - { id: T2, role: poc-main,     aud: "https://github.com/swastik-rubrik" }  # allowed only: poc repo @ main
+          - { id: T3, role: gh-env-prod,  aud: "https://github.com/swastik-rubrik" }  # env-bound role without environment -> always denied
+          - { id: T4, role: gh-main,      aud: "wrong-audience" }                     # wrong audience -> always denied
+          - { id: T5, role: no-such-role, aud: "https://github.com/swastik-rubrik" }  # nonexistent role -> always denied
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/vault-check.sh "${{ matrix.id }}" "${{ matrix.role }}" "${{ matrix.aud }}"
+
+  prod-environment:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/vault-check.sh T6 gh-env-prod "https://github.com/swastik-rubrik" prod
